@@ -3,7 +3,7 @@
 
 # ============================================================================
 # Markdown Headings → Obsidian JSON Canvas
-# Creates a .canvas file with nodes for each heading and hierarchical edges.
+# Ignores headings inside fenced code blocks.
 # ============================================================================
 
 import sys
@@ -26,47 +26,87 @@ input_file = Path(sys.argv[1]).expanduser().resolve()
 if not input_file.is_file():
     sys.exit(f"Error: File not found: {input_file}")
 
-if input_file.stat().st_size == 0:
-    sys.exit("Error: Input file is empty.")
-
 output_file = input_file.with_suffix(".canvas")
 
 if output_file.exists():
     sys.exit(f"Error: Canvas already exists: {output_file}")
 
-
-# ============================================================================
-# 2. Read Markdown content
-# ============================================================================
-
 content = input_file.read_text(encoding="utf-8")
 
 if not content.strip():
-    sys.exit("Error: No content found.")
+    sys.exit("Error: Input file is empty.")
 
 
 # ============================================================================
-# 3. Parse Markdown sections
+# 2. Parse Markdown sections
 # ============================================================================
-
-lines = content.split("\n")
 
 sections = []
 current_section = None
 
-heading_pattern = re.compile(r"^(#{1,6})[ \t]+(.*)$")
+# ATX headings require whitespace after #.
+heading_pattern = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)\s*#*\s*$")
+
+# Fenced code block opening/closing markers.
+fence_pattern = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+
+fence_char = None
+fence_length = 0
+
+lines = content.split("\n")
 
 for line in lines:
 
-    match = heading_pattern.match(line)
+    # ------------------------------------------------------------------------
+    # Detect fenced code blocks
+    # ------------------------------------------------------------------------
 
-    if match:
+    if fence_char is not None:
+
+        closing_pattern = re.compile(
+            r"^ {0,3}" + re.escape(fence_char) +
+            "{" + str(fence_length) + r",}[ \t]*$"
+        )
+
+        if closing_pattern.match(line):
+            fence_char = None
+            fence_length = 0
+
+        elif current_section is not None:
+            current_section["content"].append(line)
+
+        continue
+
+    # ------------------------------------------------------------------------
+    # Detect opening fence
+    # ------------------------------------------------------------------------
+
+    fence_match = fence_pattern.match(line)
+
+    if fence_match:
+
+        marker = fence_match.group(1)
+        fence_char = marker[0]
+        fence_length = len(marker)
+
+        if current_section is not None:
+            current_section["content"].append(line)
+
+        continue
+
+    # ------------------------------------------------------------------------
+    # Detect actual Markdown headings
+    # ------------------------------------------------------------------------
+
+    heading_match = heading_pattern.match(line)
+
+    if heading_match:
 
         if current_section is not None:
             sections.append(current_section)
 
         current_section = {
-            "level": len(match.group(1)),
+            "level": len(heading_match.group(1)),
             "heading": line,
             "content": []
         }
@@ -79,13 +119,12 @@ for line in lines:
 if current_section is not None:
     sections.append(current_section)
 
-
 if not sections:
-    sys.exit("Error: No Markdown headings found.")
+    sys.exit("Error: No valid Markdown headings found.")
 
 
 # ============================================================================
-# 4. Generate random 16-character hexadecimal ID
+# 3. Generate random 16-character hexadecimal ID
 # ============================================================================
 
 def generate_id():
@@ -93,7 +132,7 @@ def generate_id():
 
 
 # ============================================================================
-# 5. Canvas layout configuration
+# 4. Canvas layout configuration
 # ============================================================================
 
 base_x = -80
@@ -106,24 +145,19 @@ node_height = 250
 
 
 # ============================================================================
-# 6. Build nodes and hierarchical edges
+# 5. Build nodes and hierarchical edges
 # ============================================================================
 
 nodes = []
 edges = []
 
-# Stores previous heading levels and their node IDs.
 stack = []
-
 
 for index, section in enumerate(sections):
 
     node_id = generate_id()
 
-    # ------------------------------------------------------------------------
-    # Reconstruct complete section text
-    # ------------------------------------------------------------------------
-
+    # Reconstruct section text.
     node_text = section["heading"] + "\n"
 
     if section["content"]:
@@ -132,10 +166,7 @@ for index, section in enumerate(sections):
     if not node_text.endswith("\n"):
         node_text += "\n"
 
-    # ------------------------------------------------------------------------
-    # Create node
-    # ------------------------------------------------------------------------
-
+    # Create node.
     node = {
         "id": node_id,
         "type": "text",
@@ -149,10 +180,7 @@ for index, section in enumerate(sections):
 
     nodes.append(node)
 
-    # ------------------------------------------------------------------------
-    # Find parent heading
-    # ------------------------------------------------------------------------
-
+    # Find parent heading.
     current_level = section["level"]
 
     while stack and stack[-1]["level"] >= current_level:
@@ -174,10 +202,6 @@ for index, section in enumerate(sections):
 
         edges.append(edge)
 
-    # ------------------------------------------------------------------------
-    # Add current heading to hierarchy stack
-    # ------------------------------------------------------------------------
-
     stack.append({
         "level": current_level,
         "id": node_id
@@ -185,7 +209,7 @@ for index, section in enumerate(sections):
 
 
 # ============================================================================
-# 7. Assemble Canvas JSON
+# 6. Assemble Canvas JSON
 # ============================================================================
 
 canvas = {
@@ -199,23 +223,16 @@ canvas = {
 
 
 # ============================================================================
-# 8. Write Canvas file
+# 7. Write Canvas file
 # ============================================================================
 
 with output_file.open("x", encoding="utf-8") as file:
-
-    json.dump(
-        canvas,
-        file,
-        indent=2,
-        ensure_ascii=False
-    )
-
+    json.dump(canvas, file, indent=2, ensure_ascii=False)
     file.write("\n")
 
 
 # ============================================================================
-# 9. Summary
+# 8. Summary
 # ============================================================================
 
 print(f"Canvas created: {output_file}")
